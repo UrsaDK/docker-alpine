@@ -51,10 +51,7 @@ else
   echo "  - TAG:   ${TAG}" >&2
   exit 1
 fi
-
-if ! grep "AS ${TAG}\$" Dockerfile; then
-  TAG=''
-fi
+grep -q "AS ${TAG}\$" Dockerfile || TAG=''
 
 case "${COMMAND}" in
   'b'|'build')
