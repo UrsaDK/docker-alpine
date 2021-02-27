@@ -25,6 +25,10 @@ Where commands are:                               [] - optional parameters
             Stops all running containers based on the application's image.
             See 'docker container stop --help' for more information.
 
+The following environment variables control the behaviour of this script:
+
+  export DOCKER_BUILDKIT=0    # disables the use of BuildKit (not recommended)
+  export GITHUB_ACTIONS=1     # enables Github Actions compatibility
 END_OF_HELP
 }
 
