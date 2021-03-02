@@ -9,7 +9,7 @@
 
 </div>
 
-# Docker Template
+# Docker Alpine Template
 
 A template for a repository that utilises `docker` and requires CI pipeline. The pipeline is run in Github Actions. Baked image are [annotated](https://github.com/opencontainers/image-spec/blob/master/annotations.md) using [OCI Image Format](https://www.opencontainers.org).
 
