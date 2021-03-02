@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+bundle check || bundle install
+exec /etc/init.d/login_shell "${@}"
