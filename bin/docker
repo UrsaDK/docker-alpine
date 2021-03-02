@@ -5,23 +5,23 @@ cat <<END_OF_HELP
 Usage: ${0} <commands> [options]                  <> - required parameters
 Where commands are:                               [] - optional parameters
 
-  build [image:]<tag> [docker-build-options]
-            Builds a new container image using 'docker image build' command.
-            See 'docker image build --help' for a list of supported options.
+  build [image:]<tag> [docker-build-options] [-- build-context-path]
+            Builds a new container image using 'docker buildx' command.
+            See 'docker buildx --help' for a list of supported options.
 
-  run [image:]<tag> [shell-command-and-options]
+  run [image:]<tag> [docker-run-options --] [shell-command]
             Run a command in a new container with 'docker container run'.
             Container-run options are preconfigured, user input is executed.
 
-  attach [image:]<tag> [docker-attach-options]
-            Attaches input/output streams to an already running container.
-            See 'docker container attach --help' for all supported options.
-
-  exec [image:]<tag> [shell-command-and-options]
-            Executes a command in a container which launched from the image.
+  exec [image:]<tag|container_id> [docker-exec-options --] [shell-command]
+            Executes a command in the latest container launched from the image.
             See 'docker container exec --help' for more information.
 
-  stop [image:]<tag> [docker-stop-options]
+  attach [image:]<tag|container_id> [docker-attach-options]
+            Attaches input/output streams to the latest running container.
+            See 'docker container attach --help' for all supported options.
+
+  stop [image:]<tag|container_id> [docker-stop-options]
             Stops all running containers based on the application's image.
             See 'docker container stop --help' for more information.
 
@@ -30,6 +30,19 @@ The following environment variables control the behaviour of this script:
   export DOCKER_BUILDKIT=0    # disables the use of BuildKit (not recommended)
   export GITHUB_ACTIONS=1     # enables Github Actions compatibility
 END_OF_HELP
+}
+
+container_ids() {
+  local container_id="$(docker container ls -qlf "id=${TAG}")"
+  if [[ -n "${container_id}" ]]; then
+    echo "${container_id}"
+  else
+    docker container ls --quiet --filter "ancestor=${IMAGE}" "${@}"
+  fi
+}
+
+container_id() {
+  container_ids "--latest"
 }
 
 COMMAND="${1:-help}"
@@ -55,40 +68,67 @@ else
   echo "  - TAG:   ${TAG}" >&2
   exit 1
 fi
-grep -q "AS ${TAG}\$" Dockerfile || TAG=''
+
+DOCKER_ARGS=()
+USER_ARGS=()
+case "${*}" in
+  '-- '*)
+    USER_ARGS+=( "${@:2}" )
+    shift ${#}
+    ;;
+  *' -- '*)
+    INDEX=$(printf '%s\n' "${@}" | awk '/--/{print NR;exit}')
+    DOCKER_ARGS+=( "${@:1:${INDEX}-1}" )
+    USER_ARGS+=( "${@:${INDEX}+1}" )
+    shift ${#}
+    ;;
+  *' --')
+    DOCKER_ARGS+=( "${@:1:${#}-1}" )
+    shift ${#}
+    ;;
+esac
 
 case "${COMMAND}" in
-  'b'|'build')
+  'b'|'build') # -build_arg .
+    grep -q "^FROM .* AS ${TAG}\$" Dockerfile || TAG=''
     DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} \
-      docker buildx build --tag "${IMAGE}" --target "${TAG}" \
+      docker buildx build --tag "${IMAGE}" ${TAG:+--target "${TAG}"} \
       --build-arg BUILD_DATE="$(date -u +"%Y-%m-%dT%TZ")" \
       --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
-      "${@}" "${PWD}";
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
+      "${USER_ARGS[@]:-${PWD}}";
     ;;
-  'r'|'run')
-    [[ -t 1 ]] && IT='-it' # Check if output is attached to a TTY
-    docker container run ${GITHUB_ACTIONS:+-u root} \
-      --rm --init ${IT} -v "${PWD}:/mnt" "${IMAGE}" "${@}"
-    ;;
-  'a'|'attach')
-    CONTAINER_ID="$(docker container ls -qlf "ancestor=${IMAGE}")"
-    docker container attach "${@}" "${CONTAINER_ID}"
+  'r'|'run') # -v host:container --
+    [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
+    ${GITHUB_ACTIONS:-false} && DOCKER_ARGS+=( '-u' 'root' )
+    docker container run --rm --init -v "${PWD}:/mnt" \
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
+      "${IMAGE}" \
+      ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
     ;;
   'e'|'exec')
-    [[ -t 1 ]] && IT='-it' # Check if output is attached to a TTY
-    CONTAINER_ID="$(docker container ls -qlf "ancestor=${IMAGE}")"
-    docker container exec ${IT} "${CONTAINER_ID}" "${@}"
+    [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
+    echo docker container exec \
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
+      "$(container_id)" \
+      ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
+    ;;
+  'a'|'attach')
+    docker container attach \
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
+      "$(container_id)"
     ;;
   's'|'stop')
-    CONTAINER_IDS="$(docker container ls -qf "ancestor=${IMAGE}")"
-    [[ -n "${CONTAINER_IDS}" ]] && docker container stop "${@}" "${CONTAINER_IDS}"
+    docker container stop \
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
+      "$(container_ids)"
     ;;
   '-?'|'--help'|'help')
     __help
     exit
     ;;
   *)
-    echo "${0}: Unknown command -- ${DOCKER_CMD}" >&2
+    echo "${0}: Unknown command -- ${COMMAND}" >&2
     exit 1
     ;;
 esac
