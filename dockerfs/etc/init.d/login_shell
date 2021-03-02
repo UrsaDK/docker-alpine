@@ -1,9 +1,10 @@
 #!/usr/bin/env sh
+: ${SHELL:=sh}
 
 if test -z "${*}"; then
   # Start a new interactive login shell if the user calls
   # this script with no arguments, eg: via Dockerfile's ENDPOINT.
-  exec ${SHELL:-sh} -l
+  exec ${SHELL} -l
 elif grep -Fxq "$(type -P "${1}")" /etc/shells; then
   # Executed only if the user requests a specific shell that
   # is available on the current system (see /etc/shells)
@@ -11,5 +12,5 @@ elif grep -Fxq "$(type -P "${1}")" /etc/shells; then
 else
   # Replicate the behaviour of `docker exec`, delegating
   # child reaping and signal handling to docker --init
-  exec ${SHELL:-sh} -l -c "${*}"
+  exec ${SHELL} -l -c "${*}"
 fi
