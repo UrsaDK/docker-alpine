@@ -27,6 +27,9 @@ Where supported commands are:
   stop [image:]<tag|container_id> [docker-stop-options]
             Stops all running containers based on the application's image.
             See 'docker container stop --help' for more information.
+
+This script will respect the value of DOCKER_BUILDKIT environment variables,
+unless it's overridden by DOCKER_CLI_EXPERIMENTAL, which always uses BuildKit.
 END_OF_HELP
 }
 
