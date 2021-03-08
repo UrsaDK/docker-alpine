@@ -93,9 +93,10 @@ case "${COMMAND}" in
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
       "${USER_ARGS[@]:-${PWD}}";
     ;;
-  'r'|'run') # -v host:container --
+  'r'|'run')
     [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
-    docker container run --rm --init -v "${PWD}:/mnt" \
+    docker container run --rm --init \
+      --mount type=bind,source="${PWD}",target=/mnt,consistency=delegated \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
       "${IMAGE}" \
       ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
