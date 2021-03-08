@@ -20,6 +20,7 @@ Thumbs.db
 
 # Not needed in a container
 /.docker*
+/.env
 /.git*
 /bin/docker
 /docker-compose*
