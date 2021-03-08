@@ -6,8 +6,11 @@ Usage: ${0} <commands> [options]
 Where supported commands are:
 
   build [image:]<tag> [docker-build-options] [-- build-context-path]
-            Builds a new container image using 'docker buildx' command.
-            See 'docker buildx --help' for a list of supported options.
+            Builds a new container image using 'docker build' command.
+            See 'docker build --help' for a list of supported options.
+
+            If DOCKER_CLI_EXPERIMENTAL environment variable is set then
+            the image will be built using BuildKit's `buildx` command.
 
   run [image:]<tag> [docker-run-options --] [shell-command]
             Run a command in a new container with 'docker container run'.
@@ -86,8 +89,10 @@ esac
 case "${COMMAND}" in
   'b'|'build') # -build_arg .
     grep -q "^FROM .* AS ${TAG}\$" Dockerfile || TAG=''
-    DOCKER_BUILDKIT=1 \
-      docker buildx build --tag "${IMAGE}" ${TAG:+--target "${TAG}"} \
+    DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} \
+    ${DOCKER_CLI_EXPERIMENTAL:+DOCKER_BUILDKIT=1} \
+      docker ${DOCKER_CLI_EXPERIMENTAL:+buildx} build \
+      --tag "${IMAGE}" ${TAG:+--target "${TAG}"} \
       --build-arg BUILD_DATE="$(date -u +"%Y-%m-%dT%TZ")" \
       --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
