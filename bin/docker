@@ -9,8 +9,8 @@ Where supported commands are:
             Builds a new container image using 'docker build' command.
             See 'docker build --help' for a list of supported options.
 
-            If DOCKER_CLI_EXPERIMENTAL environment variable is set then
-            the image will be built using BuildKit's `buildx` command.
+            Use `buildx` as the build command to build the image with BuildKit.
+            See `docker buildx build --help` for the list of supported options.
 
   run [image:]<tag> [docker-run-options --] [shell-command]
             Run a command in a new container with 'docker container run'.
@@ -29,7 +29,7 @@ Where supported commands are:
             See 'docker container stop --help' for more information.
 
 This script will respect the value of DOCKER_BUILDKIT environment variables,
-unless it's overridden by DOCKER_CLI_EXPERIMENTAL, which always uses BuildKit.
+unless it's overridden by using `buildx` command, which always uses BuildKit.
 END_OF_HELP
 }
 
@@ -90,12 +90,12 @@ case "${*}" in
 esac
 
 case "${COMMAND}" in
-  'b'|'build') # -build_arg .
-    grep -q "^FROM .* AS ${TAG}\$" Dockerfile || TAG=''
-    DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} \
-    ${DOCKER_CLI_EXPERIMENTAL:+DOCKER_BUILDKIT=1} \
-      docker ${DOCKER_CLI_EXPERIMENTAL:+buildx} build \
-      --tag "${IMAGE}" ${TAG:+--target "${TAG}"} \
+  'b'|'build'|'buildx')
+    grep -q "^FROM .* AS ${TAG}\$" Dockerfile || unset TAG
+    [[ "${COMMAND}" == 'buildx' ]] && DOCKER_BUILDKIT=1 || unset COMMAND
+    DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} docker ${COMMAND} build \
+      --tag "${IMAGE}" \
+      ${TAG:+--target "${TAG}"} \
       --build-arg BUILD_DATE="$(date -u +"%Y-%m-%dT%TZ")" \
       --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
