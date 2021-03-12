@@ -1,0 +1,23 @@
+sync:
+  defaults:
+    ignore:
+      vcs: true
+      paths:
+        - .DS_Store
+        - ._*
+        - .solargraph.yml
+        - .vscode/
+        - \*.bak
+        - \*.dwarf
+        - \*.egg-info/
+        - \*.o
+        - \*.old
+        - \*.py[cod]
+        - \*.sw[a-p]
+        - \*~
+        - __pycache__/
+        - secrets/
+  code:
+    alpha: .
+    beta: docker://docker-alpine_mutagen/mnt/code
+    mode: two-way-resolved
