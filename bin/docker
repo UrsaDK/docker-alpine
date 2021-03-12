@@ -9,8 +9,8 @@ Where supported commands are:
             Builds a new container image using 'docker build' command.
             See 'docker build --help' for a list of supported options.
 
-            Use `buildx` as the build command to build the image with BuildKit.
-            See `docker buildx build --help` for the list of supported options.
+            Use 'buildx' as the build command to build the image with BuildKit.
+            See 'docker buildx build --help' for the list of supported options.
 
   run [image:]<tag> [docker-run-options --] [shell-command]
             Run a command in a new container with 'docker container run'.
@@ -28,8 +28,10 @@ Where supported commands are:
             Stops all running containers based on the application's image.
             See 'docker container stop --help' for more information.
 
+If 'image' value is omitted, then the script will fallback to using a lower cased name of the projects root directory, as identified by git.
+
 This script will respect the value of DOCKER_BUILDKIT environment variables,
-unless it's overridden by using `buildx` command, which always uses BuildKit.
+unless it's overridden by using 'buildx' command, which always uses BuildKit.
 END_OF_HELP
 }
 
@@ -46,9 +48,54 @@ container_id() {
   container_ids "--latest"
 }
 
+mount_volume() {
+  : ${1:?Missing required argument -- volume name}
+  local name="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-')_${1}"
+  if echo " ${2}" | grep -qE ' -(v|-volume|-mount)[[:space:]=]'; then
+    echo ""
+  elif [[ -n "$(docker volume ls --quiet --filter "name=${name}")" ]]; then
+    echo "--mount type=volume,source=${name},target=/mnt"
+  else
+    echo "--mount type=bind,source=${PRD},target=/mnt,consistency=delegated"
+  fi
+}
+
+mutagen_volumes() {
+  for volume in "$(yq eval \
+      'del(.sync.defaults) | .sync | keys | .[]' \
+      "${MUTAGEN_YML}")"; do
+    echo "--mount type=volume,source=${volume},target=:/mnt/${volume}"
+  done
+}
+
+update_docker_compose_override_yml() {
+  local override_yml="${PRD}/docker-compose.override.yml"
+  if [[ ! -f "${override_yml}" ]]; then
+    yq eval --null-input '.version="3" | .volumes={}' > ${override_yml}
+  fi
+  yq eval-all --inplace \
+    'select(fileIndex == 0) as $o
+    | select(fileIndex == 1) | del(.sync.defaults)
+    | .sync | keys | .[] as $i ireduce ({}; .[$i] = {})
+    | $o.volumes = . * $o.volumes | $o | ... style=""' \
+    "${override_yml}" "${MUTAGEN_YML}"
+}
+
+update_mutagen_yml() {
+  : ${1:?Missing required argument -- mutagen container name}
+  yq eval 'del(.sync.defaults) | .sync' "${MUTAGEN_YML}" \
+    | sed "s#docker://.*_mutagen/#docker://${1}/#" \
+    | yq eval-all --inplace \
+      'select(fileIndex == 0) as $m
+      | $m.sync = $m.sync * select(fileIndex == 1) | $m | ... style=""' \
+      "${MUTAGEN_YML}" -
+}
+
+PRD="$(git rev-parse --show-toplevel)"
+
 COMMAND="${1:-help}"
 if [[ -z "${2}" || "${2}" == '-'* ]]; then
-  IMAGE="$(echo "${PWD##*/}" | tr '[:upper:] ' '[:lower:]-')"
+  IMAGE="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-')"
   TAG="latest"
   shift 1
 elif [[ "${2}" == *':'* ]]; then
@@ -60,7 +107,7 @@ elif [[ "${2}" == *'/'* ]]; then
   TAG="latest"
   shift 2
 elif [[ -n "${2}" ]]; then
-  IMAGE="$(echo "${PWD##*/}" | tr '[:upper:] ' '[:lower:]-'):${2}"
+  IMAGE="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-'):${2}"
   TAG="${2}"
   shift 2
 else
@@ -72,22 +119,12 @@ fi
 
 DOCKER_ARGS=()
 USER_ARGS=()
-case "${*}" in
-  '-- '*)
-    USER_ARGS+=( "${@:2}" )
-    shift ${#}
-    ;;
-  *' -- '*)
-    INDEX=$(printf '%s\n' "${@}" | awk '/--/{print NR;exit}')
-    DOCKER_ARGS+=( "${@:1:${INDEX}-1}" )
-    USER_ARGS+=( "${@:${INDEX}+1}" )
-    shift ${#}
-    ;;
-  *' --')
-    DOCKER_ARGS+=( "${@:1:${#}-1}" )
-    shift ${#}
-    ;;
-esac
+if [[ " ${*} " =~ " -- " ]]; then
+  INDEX=$(printf '%s\n' "${@}" | awk '/--/{print NR;exit}')
+  DOCKER_ARGS+=( "${@:1:${INDEX}-1}" )
+  USER_ARGS+=( "${@:${INDEX}+1}" )
+  shift ${#}
+fi
 
 case "${COMMAND}" in
   'b'|'build'|'buildx')
@@ -99,12 +136,12 @@ case "${COMMAND}" in
       --build-arg BUILD_DATE="$(date -u +"%Y-%m-%dT%TZ")" \
       --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
-      "${USER_ARGS[@]:-${PWD}}";
+      "${USER_ARGS[@]:-${PRD}}";
     ;;
   'r'|'run')
     [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
     docker container run --rm --init \
-      --mount type=bind,source="${PWD}",target=/mnt,consistency=delegated \
+      $(mount_volume 'code' "${DOCKER_ARGS[*]}") \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
       "${IMAGE}" \
       ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
@@ -125,6 +162,20 @@ case "${COMMAND}" in
     docker container stop \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
       "$(container_ids)"
+    ;;
+
+  'm'|'mutate')
+    if [[ "${TAG}" == 'latest' ]]; then
+      TAG='mutagen'
+      IMAGE="${IMAGE%%:*}:${TAG}"
+    fi
+    MUTAGEN_YML="${PRD}/mutagen.yml"
+    CONTAINER_NAME="${IMAGE%%:*}_mutagen"
+    update_docker_compose_override_yml
+    update_mutagen_yml "${CONTAINER_NAME}"
+    "${0}" build "${IMAGE}"
+    "${0}" run --name "${CONTAINER_NAME}" $(mutagen_volumes) -- "${IMAGE}"
+    mutagen project start --project-file "${PRD}/mutagen.yml"
     ;;
   '-?'|'--help'|'help')
     __help
