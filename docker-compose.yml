@@ -1,0 +1,30 @@
+# When allocation ports on the host, use to following masks to
+# minimise the chances of application services having to compete
+# with other resources on published ports.
+#
+# Port mask:  27xxx
+
+version: "3"
+
+x-defaults:
+  service: &service
+    init: true
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+
+services:
+  app:
+    <<: *service
+    # build: # See README: Building a new image
+    image: docker-alpine:latest
+    volumes:
+      - "code:/mnt:delegated"
+
+volumes:
+  code:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: .
