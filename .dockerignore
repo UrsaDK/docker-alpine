@@ -25,4 +25,4 @@ Thumbs.db
 /bin/docker
 /docker-compose*
 /Dockerfile
-/mutagen.yml
+/mutagen*

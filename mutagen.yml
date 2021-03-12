@@ -7,15 +7,14 @@ sync:
         - ._*
         - .solargraph.yml
         - .vscode/
-        - \*.bak
         - \*.dwarf
         - \*.egg-info/
         - \*.o
-        - \*.old
         - \*.py[cod]
         - \*.sw[a-p]
         - \*~
         - __pycache__/
+        - mutagen.yml*
         - secrets/
   code:
     alpha: .
