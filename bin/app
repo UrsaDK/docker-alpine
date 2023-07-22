@@ -25,8 +25,12 @@ Where supported commands are:
             See 'docker container attach --help' for all supported options.
 
   stop [image:]<tag|container_id> [docker-stop-options]
-            Stops all running containers based on the application's image.
+            Stops all running containers based on the application's image,
+            as well as the mutagen container, if one is running.
             See 'docker container stop --help' for more information.
+
+  sync [image:]<tag>
+            TODO
 
 If 'image' value is omitted, then the script will fallback to using a lower cased name of the projects root directory, as identified by git.
 
@@ -35,24 +39,21 @@ unless it's overridden by using 'buildx' command, which always uses BuildKit.
 END_OF_HELP
 }
 
-container_ids() {
-  local container_id="$(docker container ls -qlf "id=${TAG}")"
-  if [[ -n "${container_id}" ]]; then
-    echo "${container_id}"
+default_tag() {
+  if [[ "${COMMAND}" == 'sync' ]]; then
+    echo 'mutagen'
   else
-    docker container ls --quiet --filter "ancestor=${IMAGE}" "${@}"
+    echo 'latest'
   fi
 }
 
-container_id() {
-  container_ids "--latest"
-}
-
-mount_volume() {
-  : ${1:?Missing required argument -- volume name}
-  local name="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-')_${1}"
-  if echo " ${2}" | grep -qE ' -(v|-volume|-mount)[[:space:]=]'; then
-    echo ""
+arg_mount_volume_or_bind() {
+  : "${1:?Missing required argument -- volume name}"
+  local name arg_regex
+  name="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-')_${1}"
+  arg_regex=' -(v|-volume|-mount)[[:space:]=]'
+  if echo " ${DOCKER_ARGS[*]}" | grep -qE "${arg_regex}"; then
+    : # Do nothing if a custom volume argument is supplied
   elif [[ -n "$(docker volume ls --quiet --filter "name=${name}")" ]]; then
     echo "--mount type=volume,source=${name},target=/mnt"
   else
@@ -60,43 +61,33 @@ mount_volume() {
   fi
 }
 
-mutagen_volumes() {
-  for volume in "$(yq eval \
-      'del(.sync.defaults) | .sync | keys | .[]' \
-      "${MUTAGEN_YML}")"; do
-    echo "--mount type=volume,source=${volume},target=:/mnt/${volume}"
-  done
+latest_container_by_id_or_name_or_ancestor() {
+  containers_by_id_or_ancestor "${@}" "--latest"
 }
 
-update_docker_compose_override_yml() {
-  local override_yml="${PRD}/docker-compose.override.yml"
-  if [[ ! -f "${override_yml}" ]]; then
-    yq eval --null-input '.version="3" | .volumes={}' > ${override_yml}
+containers_by_id_or_name_or_ancestor() {
+  : "${1:?Missing required argument -- container id or image name}"
+  : "${1:+Optional argument -- docker container ls --help}"
+  local container_id
+  container_id="$(docker container ls -qlf "id=${1##*:}")"
+  if [[ -n "${container_id}" ]]; then
+    echo "${container_id}"
+  else
+    container_id="$(docker container ls -qlf "name=${1##*:}")"
+    if [[ -n "${container_id}" ]]; then
+      echo "${container_id}"
+    else
+      docker container ls --quiet --filter "ancestor=${1}" "${@:2}"
+    fi
   fi
-  yq eval-all --inplace \
-    'select(fileIndex == 0) as $o
-    | select(fileIndex == 1) | del(.sync.defaults)
-    | .sync | keys | .[] as $i ireduce ({}; .[$i] = {})
-    | $o.volumes = . * $o.volumes | $o | ... style=""' \
-    "${override_yml}" "${MUTAGEN_YML}"
 }
 
-update_mutagen_yml() {
-  : ${1:?Missing required argument -- mutagen container name}
-  yq eval 'del(.sync.defaults) | .sync' "${MUTAGEN_YML}" \
-    | sed "s#docker://.*_mutagen/#docker://${1}/#" \
-    | yq eval-all --inplace \
-      'select(fileIndex == 0) as $m
-      | $m.sync = $m.sync * select(fileIndex == 1) | $m | ... style=""' \
-      "${MUTAGEN_YML}" -
-}
-
-PRD="$(git rev-parse --show-toplevel)"
-
+APP_ROOT="$(git rev-parse --show-toplevel)"
 COMMAND="${1:-help}"
+
 if [[ -z "${2}" || "${2}" == '-'* ]]; then
-  IMAGE="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-')"
-  TAG="latest"
+  IMAGE="$(echo "${APP_ROOT##*/}" | tr '[:upper:] ' '[:lower:]-')"
+  TAG="$(default_tag)"
   shift 1
 elif [[ "${2}" == *':'* ]]; then
   IMAGE="${2}"
@@ -104,10 +95,10 @@ elif [[ "${2}" == *':'* ]]; then
   shift 2
 elif [[ "${2}" == *'/'* ]]; then
   IMAGE="${2}"
-  TAG="latest"
+  TAG="$(default_tag)"
   shift 2
 elif [[ -n "${2}" ]]; then
-  IMAGE="$(echo "${PRD##*/}" | tr '[:upper:] ' '[:lower:]-'):${2}"
+  IMAGE="$(echo "${APP_ROOT##*/}" | tr '[:upper:] ' '[:lower:]-'):${2}"
   TAG="${2}"
   shift 2
 else
@@ -129,57 +120,55 @@ fi
 case "${COMMAND}" in
   'b'|'build'|'buildx')
     grep -q "^FROM .* AS ${TAG}\$" Dockerfile || unset TAG
-    [[ "${COMMAND}" == 'buildx' ]] && DOCKER_BUILDKIT=1 || unset COMMAND
-    DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} docker ${COMMAND} build \
+    if [[ "${COMMAND}" == 'buildx' ]]; then
+      DOCKER_BUILDKIT=1
+    else
+      unset COMMAND
+    fi
+    DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1} \
+      docker ${COMMAND:+"buildx"} build \
       --tag "${IMAGE}" \
       ${TAG:+--target "${TAG}"} \
       --build-arg BUILD_DATE="$(date -u +"%Y-%m-%dT%TZ")" \
       --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
-      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${1:+"${@}"} \
-      "${USER_ARGS[@]:-${PRD}}";
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} ${@:+"${@}"} \
+      "${USER_ARGS[@]:-${APP_ROOT}}";
     ;;
   'r'|'run')
     [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
+    read -ra MOUNT_ARGS < <( arg_mount_volume_or_bind 'app' )
     docker container run --rm --init \
-      $(mount_volume 'code' "${DOCKER_ARGS[*]}") \
+      ${MOUNT_ARGS[@]:+"${MOUNT_ARGS[@]}"} \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
       "${IMAGE}" \
-      ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
+      ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${@:+"${@}"}
     ;;
   'e'|'exec')
     [[ -t 1 ]] && DOCKER_ARGS+=( '-it' ) # Check if output is attached to a TTY
     docker container exec \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
-      "$(container_id)" \
+      "$(latest_container_by_id_or_name_or_ancestor "${IMAGE}")" \
       ${USER_ARGS[@]:+"${USER_ARGS[@]}"} ${1:+"${@}"}
     ;;
   'a'|'attach')
     docker container attach \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
-      "$(container_id)"
+      "$(latest_container_by_id_or_name_or_ancestor "${IMAGE}")"
     ;;
   's'|'stop')
     docker container stop \
       ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
-      "$(container_ids)"
-    ;;
+      "$(containers_by_id_or_name_or_ancestor "${IMAGE}")"
 
-  'm'|'mutate')
-    if [[ "${TAG}" == 'latest' ]]; then
-      TAG='mutagen'
-      IMAGE="${IMAGE%%:*}:${TAG}"
-    fi
-    MUTAGEN_YML="${PRD}/mutagen.yml"
-    CONTAINER_NAME="${IMAGE%%:*}_mutagen"
-    update_docker_compose_override_yml
-    update_mutagen_yml "${CONTAINER_NAME}"
-    "${0}" build "${IMAGE}"
-    "${0}" run --name "${CONTAINER_NAME}" $(mutagen_volumes) -- "${IMAGE}"
-    mutagen project start --project-file "${PRD}/mutagen.yml"
-    ;;
-  '-?'|'--help'|'help')
-    __help
-    exit
+
+
+    docker container stop \
+      ${DOCKER_ARGS[@]:+"${DOCKER_ARGS[@]}"} \
+      "$(containers_by_id_or_name_or_ancestor "${IMAGE%%:*}_mutagen")"
+      "$(containers_by_id_or_name_or_ancestor "${IMAGE%%:*}:mutagen")"
+
+
+
     ;;
   *)
     echo "${0}: Unknown command -- ${COMMAND}" >&2
