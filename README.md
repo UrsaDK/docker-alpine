@@ -14,23 +14,28 @@
 A template for a repository that utilises `docker` and requires CI pipeline. The pipeline is run in Github Actions. Baked image are [annotated](https://github.com/opencontainers/image-spec/blob/master/annotations.md) using [OCI Image Format](https://www.opencontainers.org).
 
 - [Requirements](#requirements)
-- [Significant Locations](#significant-locations)
+- [Building a new image](#building-a-new-image)
 
 ## Requirements
 
-  - `git`
-  - `docker`
+You will definitely need:
 
-## Significant Locations
+  - [git](https://git-scm.com)
+  - [docker](https://www.docker.com)
+  - [mutagen](https://mutagen.io)
+  - [yq](https://github.com/mikefarah/yq)
+  - [bash](https://www.gnu.org/software/bash/) including: awk, grep
 
-The following files and directories (relative to the root directory of an application), are of special significance:
+See [`./macos/README`](./macos/README.md) if you're on MacOS.
 
-  - `.profile` - this file will be sourced by the login shell on the container start up. Ideally, code in this file should be kept POSIX compliant.
+Finally, you will want to update the following resources:
 
-  - `bin/docker` - a custom replacement for `docker-compose`. This script is used to build and run the project via docker. For more information see `bin/docker --help`.
+  - ./docker-compose.yml - `services → app → image` <br>
+    Edit the name portion of the application docker image.
 
-  - `dockerfs` - represents root file system of the docker container. All files placed into this directory will be copied to the container preserving their mode and path.
+  - ./macos/docker-compose.yml - `sync → * → beta` <br>
+    Edit the name portion of the application docker image.
 
-> ️📖 **NOTE**
->
-> Docker swarm is the primary method of deployment for this project. Thus, a concerted efforts is made to avoid adding a dependency on `docker-compose`.
+## Building a new image
+
+Docker Compose does not support dynamic variables. Therefore, there is no way to define BUILD_SHA and BUILD_DATE when using `docker compose build`. As such, `docker compose build` is discouraged is favour of `./bin/app build`.
